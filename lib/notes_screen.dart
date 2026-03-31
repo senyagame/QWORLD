@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'main.dart'; // Импорт для перевода и настроек темы
 
 class Note {
@@ -10,7 +12,21 @@ class Note {
 
   Note({required this.id, required this.title, required this.content, required this.date});
 
-// В будущем здесь можно добавить методы для работы с JSON (Shared Preferences)
+  // Преобразование в JSON для сохранения
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'content': content,
+    'date': date.toIso8601String(),
+  };
+
+  // Создание объекта из JSON при загрузке
+  factory Note.fromJson(Map<String, dynamic> json) => Note(
+    id: json['id'],
+    title: json['title'],
+    content: json['content'],
+    date: DateTime.parse(json['date']),
+  );
 }
 
 class NotesScreen extends StatefulWidget {
@@ -21,8 +37,8 @@ class NotesScreen extends StatefulWidget {
 }
 
 class _NotesScreenState extends State<NotesScreen> {
-  // Список заметок теперь хранится локально в состоянии виджета
-  static List<Note> _localNotes = [];
+  // Убрали static, чтобы состояние правильно обновлялось при переходе по экранам
+  List<Note> _localNotes = [];
   bool _isLoading = true;
 
   @override
@@ -31,15 +47,37 @@ class _NotesScreenState extends State<NotesScreen> {
     _loadNotes();
   }
 
-  // Имитация загрузки из локального хранилища
-  void _loadNotes() {
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
+  // Загрузка из SharedPreferences
+  Future<void> _loadNotes() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? notesString = prefs.getString('saved_notes');
+
+      if (notesString != null) {
+        final List<dynamic> decodedList = jsonDecode(notesString);
+        _localNotes = decodedList.map((item) => Note.fromJson(item)).toList();
       }
-    });
+    } catch (e) {
+      debugPrint("Ошибка загрузки заметок: $e");
+      _localNotes = [];
+    }
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  // Сохранение в SharedPreferences
+  Future<void> _saveNotes() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String encodedList = jsonEncode(_localNotes.map((note) => note.toJson()).toList());
+      await prefs.setString('saved_notes', encodedList);
+    } catch (e) {
+      debugPrint("Ошибка сохранения заметок: $e");
+    }
   }
 
   void _openNoteEditor({Note? note}) {
@@ -49,7 +87,7 @@ class _NotesScreenState extends State<NotesScreen> {
         fullscreenDialog: true,
         builder: (context) => FullScreenNoteEditor(
           note: note,
-          onSave: (title, content) {
+          onSave: (title, content) async {
             final trimmedTitle = title.trim();
             final trimmedContent = content.trim();
 
@@ -73,11 +111,14 @@ class _NotesScreenState extends State<NotesScreen> {
                 // Обновление существующей
                 note.title = trimmedTitle;
                 note.content = trimmedContent;
-                // Перемещаем обновленную заметку наверх (опционально)
+                // Перемещаем обновленную заметку наверх
                 _localNotes.remove(note);
                 _localNotes.insert(0, note);
               }
             });
+
+            // Ждем, пока сохранится в память
+            await _saveNotes();
           },
         ),
       ),
@@ -117,10 +158,12 @@ class _NotesScreenState extends State<NotesScreen> {
               ListTile(
                 leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
                 title: Text(isRu ? "Удалить" : "Delete"),
-                onTap: () {
+                onTap: () async {
                   setState(() {
                     _localNotes.removeAt(index);
                   });
+                  // Сохраняем список после удаления
+                  await _saveNotes();
                   Navigator.pop(context);
                 },
               ),
