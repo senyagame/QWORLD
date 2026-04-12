@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -6,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:math' as math;
+import 'package:in_app_update/in_app_update.dart';
 
 // Экраны
 import 'weather_screen.dart';
@@ -15,36 +18,70 @@ import 'notes_screen.dart';
 import 'settings_screen.dart';
 import 'notification_service.dart';
 
-final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.system);
+enum AppTheme { system, light, dark, ocean, neon, custom }
+
+final ValueNotifier<AppTheme> themeNotifier = ValueNotifier(AppTheme.system);
 final ValueNotifier<Locale> localeNotifier = ValueNotifier(const Locale('ru'));
 
 class AppSettings {
   static SharedPreferences? _prefs;
-  static ThemeMode theme = ThemeMode.system;
+  static AppTheme theme = AppTheme.system;
   static Locale locale = const Locale('ru');
   static bool notifications = true;
   static String lastVersion = "";
 
+  static String customImagePath = "";
+  static double customBlur = 0.0;
+  static double customBrightness = 0.8;
+  static bool customIsDark = true;
+
   static Future<void> init() async {
     try {
       _prefs = await SharedPreferences.getInstance();
-      final themeIndex = _prefs?.getInt('theme_mode') ?? 0;
-      theme = ThemeMode.values[themeIndex];
+
+      final String themeString = _prefs?.getString('app_theme') ?? 'system';
+      theme = AppTheme.values.firstWhere(
+            (e) => e.name == themeString,
+        orElse: () => AppTheme.system,
+      );
       themeNotifier.value = theme;
+
       final langCode = _prefs?.getString('language_code') ?? 'ru';
       locale = Locale(langCode);
       localeNotifier.value = locale;
       notifications = _prefs?.getBool('notifications') ?? true;
       lastVersion = _prefs?.getString('last_version') ?? "";
+
+      customImagePath = _prefs?.getString('custom_image_path') ?? "";
+      customBlur = _prefs?.getDouble('custom_blur') ?? 0.0;
+      customBrightness = _prefs?.getDouble('custom_brightness') ?? 0.8;
+      customIsDark = _prefs?.getBool('custom_is_dark') ?? true;
+
     } catch (e) {
       debugPrint("Ошибка загрузки настроек: $e");
     }
   }
 
-  static Future<void> saveTheme(ThemeMode mode) async {
+  static Future<void> saveTheme(AppTheme mode) async {
     theme = mode;
     themeNotifier.value = mode;
-    await _prefs?.setInt('theme_mode', mode.index);
+    await _prefs?.setString('app_theme', mode.name);
+  }
+
+  static Future<void> saveCustomTheme({
+    required String path,
+    required double blur,
+    required double brightness,
+    required bool isDark,
+  }) async {
+    customImagePath = path;
+    customBlur = blur;
+    customBrightness = brightness;
+    customIsDark = isDark;
+    await _prefs?.setString('custom_image_path', path);
+    await _prefs?.setDouble('custom_blur', blur);
+    await _prefs?.setDouble('custom_brightness', brightness);
+    await _prefs?.setBool('custom_is_dark', isDark);
   }
 
   static Future<void> saveLocale(Locale loc) async {
@@ -64,7 +101,7 @@ class AppSettings {
   }
 }
 
-const String currentAppVersion = "2.2.0";
+const String currentAppVersion = "2.6.0"; // Обновила версию для тебя! :)
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -80,39 +117,139 @@ class QWorldApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<ThemeMode>(
+    return ValueListenableBuilder<AppTheme>(
       valueListenable: themeNotifier,
       builder: (_, mode, __) {
         return ValueListenableBuilder<Locale>(
           valueListenable: localeNotifier,
           builder: (_, locale, __) {
+
+            ThemeData lightT = ThemeData(
+              useMaterial3: true,
+              brightness: Brightness.light,
+              scaffoldBackgroundColor: const Color(0xFFF2F2F7),
+              cardColor: Colors.white,
+              appBarTheme: const AppBarTheme(
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                centerTitle: false,
+                titleTextStyle: TextStyle(color: Colors.black, fontSize: 28, fontWeight: FontWeight.w900),
+              ),
+            );
+
+            ThemeData darkT = ThemeData(
+              useMaterial3: true,
+              brightness: Brightness.dark,
+              scaffoldBackgroundColor: Colors.black,
+              cardColor: const Color(0xFF1C1C1E),
+              appBarTheme: const AppBarTheme(
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                centerTitle: false,
+                titleTextStyle: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900),
+              ),
+            );
+
+            ThemeMode tMode = ThemeMode.system;
+
+            if (mode == AppTheme.light) tMode = ThemeMode.light;
+            if (mode == AppTheme.dark) tMode = ThemeMode.dark;
+
+            if (mode == AppTheme.ocean) {
+              tMode = ThemeMode.light;
+              lightT = darkT = ThemeData(
+                useMaterial3: true,
+                brightness: Brightness.light,
+                scaffoldBackgroundColor: const Color(0xFFE0F7FA),
+                cardColor: Colors.white,
+                appBarTheme: const AppBarTheme(
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  centerTitle: false,
+                  titleTextStyle: TextStyle(color: Color(0xFF006064), fontSize: 28, fontWeight: FontWeight.w900),
+                ),
+              );
+            }
+            if (mode == AppTheme.neon) {
+              tMode = ThemeMode.dark;
+              darkT = lightT = ThemeData(
+                useMaterial3: true,
+                brightness: Brightness.dark,
+                scaffoldBackgroundColor: const Color(0xFF050505),
+                cardColor: const Color(0xFF151515),
+                appBarTheme: const AppBarTheme(
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  centerTitle: false,
+                  titleTextStyle: TextStyle(color: Colors.greenAccent, fontSize: 28, fontWeight: FontWeight.w900),
+                ),
+              );
+            }
+            if (mode == AppTheme.custom) {
+              tMode = AppSettings.customIsDark ? ThemeMode.dark : ThemeMode.light;
+              ThemeData base = AppSettings.customIsDark ? darkT : lightT;
+
+              lightT = darkT = base.copyWith(
+                scaffoldBackgroundColor: Colors.transparent,
+                cardColor: (AppSettings.customIsDark ? Colors.black : Colors.white).withOpacity(0.3),
+                appBarTheme: base.appBarTheme.copyWith(
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  centerTitle: false,
+                  titleTextStyle: TextStyle(
+                      color: AppSettings.customIsDark ? Colors.white : Colors.black,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900
+                  ),
+                ),
+              );
+            }
+
             return MaterialApp(
               title: 'QWORLD!',
               debugShowCheckedModeBanner: false,
-              themeMode: mode,
+              themeMode: tMode,
               locale: locale,
-              theme: ThemeData(
-                useMaterial3: true,
-                brightness: Brightness.light,
-                scaffoldBackgroundColor: const Color(0xFFF2F2F7),
-                appBarTheme: const AppBarTheme(
-                  backgroundColor: Colors.transparent,
-                  elevation: 0,
-                  centerTitle: false,
-                  titleTextStyle: TextStyle(color: Colors.black, fontSize: 28, fontWeight: FontWeight.w900),
-                ),
-              ),
-              darkTheme: ThemeData(
-                useMaterial3: true,
-                brightness: Brightness.dark,
-                scaffoldBackgroundColor: Colors.black,
-                appBarTheme: const AppBarTheme(
-                  backgroundColor: Colors.transparent,
-                  elevation: 0,
-                  centerTitle: false,
-                  titleTextStyle: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900),
-                ),
-              ),
+              theme: lightT,
+              darkTheme: darkT,
+              builder: (context, child) {
+                return ValueListenableBuilder<AppTheme>(
+                  valueListenable: themeNotifier,
+                  builder: (context, currentMode, _) {
+                    if (currentMode != AppTheme.custom) return child!;
+
+                    return Stack(
+                      children: [
+                        Container(color: AppSettings.customIsDark ? Colors.black : Colors.white),
+
+                        if (AppSettings.customImagePath.isNotEmpty)
+                          Positioned.fill(
+                            child: ImageFiltered(
+                              imageFilter: ImageFilter.blur(
+                                sigmaX: AppSettings.customBlur > 0 ? AppSettings.customBlur : 0.001,
+                                sigmaY: AppSettings.customBlur > 0 ? AppSettings.customBlur : 0.001,
+                              ),
+                              child: Image.file(
+                                File(AppSettings.customImagePath),
+                                fit: BoxFit.cover,
+                                errorBuilder: (ctx, err, st) => const SizedBox(),
+                              ),
+                            ),
+                          ),
+
+                        Positioned.fill(
+                          child: Container(
+                            color: (AppSettings.customIsDark ? Colors.black : Colors.white)
+                                .withOpacity(1.0 - AppSettings.customBrightness),
+                          ),
+                        ),
+
+                        child!,
+                      ],
+                    );
+                  },
+                );
+              },
               home: AppSettings.lastVersion != currentAppVersion
                   ? const OnboardingScreen()
                   : const HomeScreen(),
@@ -254,7 +391,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> with TickerProvider
       if (!mounted) return;
       setState(() {
         _centerText = "2";
-        _rotationAngle = 0.5; // Классический поворот на пол-оборота
+        _rotationAngle = 0.5;
       });
       _morphController.forward();
     });
@@ -358,7 +495,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> with TickerProvider
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Spacer(),
-              // Изменено: масштаб увеличен с 1.0 до 1.15
               AnimatedScale(
                 scale: _isVisible ? 1.15 : 0.0,
                 duration: const Duration(milliseconds: 1000),
@@ -366,11 +502,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> with TickerProvider
                 child: AnimatedRotation(
                   turns: _rotationAngle,
                   duration: const Duration(milliseconds: 2500),
-                  curve: Curves.easeInOutQuart,
+                  curve: Curves.easeInOutCubic,
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      // Фигура с переливающимся градиентом
                       AnimatedBuilder(
                         animation: Listenable.merge([_morphController, _gradientLoopController]),
                         builder: (context, child) {
@@ -385,11 +520,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> with TickerProvider
                           );
                         },
                       ),
-                      // Текст (компенсирует вращение, чтобы не переворачиваться)
                       AnimatedRotation(
                         turns: -_rotationAngle,
                         duration: const Duration(milliseconds: 2500),
-                        curve: Curves.easeInOutQuart,
+                        curve: Curves.easeInOutCubic,
                         child: AnimatedSwitcher(
                           duration: const Duration(milliseconds: 300),
                           transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: ScaleTransition(scale: anim, child: child)),
@@ -504,7 +638,20 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _markVersionAsSeen();
     _initAppData();
+    _checkForUpdate(); 
     localeNotifier.addListener(_onLocaleChanged);
+  }
+
+  Future<void> _checkForUpdate() async {
+    try {
+      final info = await InAppUpdate.checkForUpdate();
+      if (info.updateAvailability == UpdateAvailability.updateAvailable) {
+        await InAppUpdate.startFlexibleUpdate();
+        await InAppUpdate.completeFlexibleUpdate();
+      }
+    } catch (e) {
+      debugPrint("Ошибка при проверке обновлений Google Play: $e");
+    }
   }
 
   Future<void> _markVersionAsSeen() async {
@@ -553,7 +700,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _fetchQuickData() async {
-    const apiKey = "8176cdd345a6be81bb9361a182580d03";
+    // API КЛЮЧ СКРЫТ
+    const apiKey = "YOUR_OPENWEATHER_API_KEY_HERE";
     double lat = _currentPosition?.latitude ?? 43.2389;
     double lon = _currentPosition?.longitude ?? 76.8897;
     String lang = localeNotifier.value.languageCode;
@@ -614,7 +762,9 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildWidgetCard(
                 context,
                 title: isRu ? "ИИ Гид" : "AI Guide",
-                color: isDark ? const Color(0xFF2C1C3D) : Colors.purple.withOpacity(0.08),
+                color: themeNotifier.value == AppTheme.custom
+                    ? Colors.purple.withOpacity(0.2)
+                    : (isDark ? const Color(0xFF2C1C3D) : Colors.purple.withOpacity(0.08)),
                 child: ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.auto_awesome, color: Colors.purple, size: 36),
@@ -663,7 +813,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildWidgetCard(BuildContext context, {required String title, required Widget child, Color? color, required VoidCallback onTap}) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(28),
@@ -671,7 +820,7 @@ class _HomeScreenState extends State<HomeScreen> {
         width: double.infinity,
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: color ?? (isDark ? const Color(0xFF1C1C1E) : Colors.white),
+          color: color ?? Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(28),
         ),
         child: Column(
