@@ -42,6 +42,14 @@ class CityOption {
   CityOption(this.name, this.lat, this.lon, this.icon);
 }
 
+class ChatMessage {
+  final String text;
+  final bool isUser;
+  final String? imageUrl;
+
+  ChatMessage({required this.text, required this.isUser, this.imageUrl});
+}
+
 class EventsAiScreen extends StatefulWidget {
   const EventsAiScreen({super.key});
 
@@ -50,6 +58,9 @@ class EventsAiScreen extends StatefulWidget {
 }
 
 class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProviderStateMixin {
+  // Ключ удален для безопасности. Не забудь вставить свой перед запуском!
+  static const String _groqApiKey = 'YOUR_GROQ_API_KEY';
+
   bool _isLoading = false;
   bool _isInitialLoading = true;
   List<AiPlace> _popularPlaces = [];
@@ -57,6 +68,15 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
   String? _error;
   String _currentCity = "";
   bool _showButtons = false;
+
+  bool _isChatOpen = false;
+  final List<ChatMessage> _chatMessages = [];
+  final TextEditingController _chatController = TextEditingController();
+  final ScrollController _chatScrollController = ScrollController();
+  bool _isTyping = false;
+  bool _showQuickActions = false;
+
+  String _currentPlaceForChat = "";
 
   final List<CityOption> _manualCities = [
     CityOption("Астана", 51.1605, 71.4704, "🇰🇿"),
@@ -69,6 +89,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
     CityOption("Краснодар", 45.0355, 38.9747, "🇷🇺"),
     CityOption("Сочи", 43.5853, 39.7203, "🇷🇺"),
     CityOption("Владивосток", 43.1155, 131.8855, "🇷🇺"),
+    CityOption("Варшава", 52.2298, 21.0118, "🇵🇱"),
     CityOption("Нью-Йорк", 40.7128, -74.0060, "🇺🇸"),
     CityOption("Лос-Анджелес", 34.0522, -118.2437, "🇺🇸"),
     CityOption("Сан-Франциско", 37.7749, -122.4194, "🇺🇸"),
@@ -90,6 +111,13 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
     _fetchRecommendations();
   }
 
+  @override
+  void dispose() {
+    _chatController.dispose();
+    _chatScrollController.dispose();
+    super.dispose();
+  }
+
   Future<String> _callAi(Uri url, String key, List<Map<String, String>> messages, {bool isJson = false}) async {
     final response = await http.post(
       url,
@@ -98,17 +126,18 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
         'Content-Type': 'application/json',
       },
       body: jsonEncode({
-        "model": "llama-3.1-8b-instant",
+        "model": "llama-3.3-70b-versatile",
         "messages": messages,
         if (isJson) "response_format": {"type": "json_object"},
-        "temperature": 0.5, // Немного снизила для более стабильных ответов
-        "max_tokens": 1000, // Ограничение для скорости
+        "temperature": 0.1,
+        "max_tokens": 1000,
       }),
     ).timeout(const Duration(seconds: 20));
 
     if (response.statusCode == 200) {
       return utf8.decode(response.bodyBytes);
     } else {
+      debugPrint("API Error body: ${response.body}");
       throw 'API Error: ${response.statusCode}';
     }
   }
@@ -145,41 +174,45 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
       _isInitialLoading = true;
       _error = null;
       _showButtons = false;
+      if (manualName != null) _currentCity = manualName;
     });
 
     try {
-      if (manualLat != null && manualLon != null && manualName != null) {
-        _currentCity = manualName;
-      } else {
-        Position position = await _determinePosition();
+      if (manualLat == null || manualLon == null) {
         try {
+          Position position = await _determinePosition();
           List<Placemark> placemarks = await placemarkFromCoordinates(position.latitude, position.longitude);
           if (placemarks.isNotEmpty && placemarks.first.locality != null) {
             _currentCity = placemarks.first.locality!;
           } else {
-            _currentCity = "Ваш город";
+            _currentCity = "Алматы";
           }
-        } catch (_) {
-          _currentCity = "Ваш город";
+        } catch (e) {
+          if (mounted) {
+            setState(() {
+              _error = "needs_manual_selection";
+              _isInitialLoading = false;
+            });
+          }
+          return;
         }
       }
 
-      const groqKey = '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';
       final url = Uri.parse('https://api.groq.com/openai/v1/chat/completions');
       final isRu = localeNotifier.value.languageCode == 'ru';
 
-      // ОПТИМИЗАЦИЯ: Объединяем генерацию и "аудит" в один жесткий системный промпт
-      final responseRaw = await _callAi(url, groqKey, [
+      final responseRaw = await _callAi(url, _groqApiKey, [
         {
           "role": "system",
-          "content": "You are an expert local guide for $_currentCity. Return ONLY a JSON object with 'places' key. "
-              "Each place must have: name, description (max 12 words), type (food, park, museum, culture, landmark), is_popular (boolean). "
-              "CRITICAL: All 8 places MUST be strictly within $_currentCity limits. Verify locations before answering. "
-              "Language: ${isRu ? 'Russian' : 'English'}."
+          "content": "You are a strict, factual local guide for $_currentCity. Return ONLY a JSON object with a 'places' array. "
+              "Each place must have: 'name' (use EXACT official local names. DO NOT translate proper names into English! If the language is Russian, leave the local Russian name, e.g., 'Зеленый базар' instead of 'Green market'), "
+              "'description' (max 12 words), 'type' (food, park, museum, culture, landmark), 'is_popular' (boolean). "
+              "CRITICAL RULES: 1) ALL 8 places MUST truly exist in $_currentCity right now. 2) DO NOT invent, guess, or hallucinate names. 3) NEVER translate place names into English if isRu is true. "
+              "Language for descriptions: ${isRu ? 'Russian' : 'English'}."
         },
         {
           "role": "user",
-          "content": "Suggest 8 mixed popular and hidden places strictly in $_currentCity."
+          "content": "Suggest 8 mixed popular and hidden places strictly in $_currentCity. Only real places!"
         }
       ], isJson: true);
 
@@ -189,10 +222,29 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
 
       final allPlaces = list.map((e) => AiPlace.fromJson(e)).toList();
 
+      List<AiPlace?> verifiedPlacesFuture = await Future.wait(allPlaces.map((place) async {
+        try {
+          List<Location> locations = await locationFromAddress("${place.name}, $_currentCity");
+          if (locations.isNotEmpty) {
+            return place;
+          }
+        } catch (e) {
+          debugPrint("ИИ нафантазировал (отбраковано картами): ${place.name}");
+        }
+        return null;
+      }));
+
+      List<AiPlace> verifiedPlaces = verifiedPlacesFuture.whereType<AiPlace>().toList();
+
+      if (verifiedPlaces.isEmpty) {
+        debugPrint("Геокодер отвалился или ничего не нашел, используем сырые данные ИИ.");
+        verifiedPlaces = allPlaces;
+      }
+
       if (mounted) {
         setState(() {
-          _popularPlaces = allPlaces.where((p) => p.isPopular).toList();
-          _otherPlaces = allPlaces.where((p) => !p.isPopular).toList();
+          _popularPlaces = verifiedPlaces.where((p) => p.isPopular).toList();
+          _otherPlaces = verifiedPlaces.where((p) => !p.isPopular).toList();
           _isInitialLoading = false;
         });
 
@@ -201,6 +253,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
         });
       }
     } catch (e) {
+      debugPrint("Recommendation Error: $e");
       if (mounted) {
         setState(() {
           _error = "needs_manual_selection";
@@ -210,63 +263,173 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
     }
   }
 
-  Future<void> _fetchDetailedInfo(String placeName, String type) async {
-    final isRu = localeNotifier.value.languageCode == 'ru';
-    setState(() => _isLoading = true);
+  void _openChatWithPlace(String placeName) {
+    setState(() {
+      _isChatOpen = true;
+      _currentPlaceForChat = placeName;
+      _chatMessages.clear();
+      _showQuickActions = false;
+    });
+    _sendChatMessage("Расскажи подробнее про $placeName в городе $_currentCity");
+  }
 
+  Future<String?> _fetchImageForPlace(String placeName) async {
     try {
-      const groqKey = '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';
-      final url = Uri.parse('https://api.groq.com/openai/v1/chat/completions');
+      final query = Uri.encodeComponent("$placeName $_currentCity");
 
-      // Убираем двойной аудит и здесь для скорости
-      final detailRaw = await _callAi(url, groqKey, [
-        {
-          "role": "system",
-          "content": "Professional local expert in $_currentCity. Provide a concise 4-sentence paragraph about $placeName. "
-              "Ensure the info is accurate for $_currentCity. Language: ${isRu ? 'Russian' : 'English'}."
-        },
-        {"role": "user", "content": "Tell me about $placeName in $_currentCity."}
-      ]);
+      final searchUrl = Uri.parse(
+          'https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=$query&gsrnamespace=6&gsrlimit=5&prop=imageinfo&iiprop=url&format=json'
+      );
 
-      final detailText = jsonDecode(detailRaw)['choices'][0]['message']['content'];
+      final response = await http.get(searchUrl);
+      final data = jsonDecode(response.body);
 
-      if (mounted) {
-        _navigateToDetails(placeName, detailText, type);
+      if (data['query'] != null && data['query']['pages'] != null) {
+        final pages = data['query']['pages'] as Map<String, dynamic>;
+        final List<String> imageUrls = [];
+
+        for (var page in pages.values) {
+          if (page['imageinfo'] != null && page['imageinfo'].isNotEmpty) {
+            imageUrls.add(page['imageinfo'][0]['url']);
+          }
+        }
+
+        if (imageUrls.isNotEmpty) {
+          imageUrls.shuffle();
+          return imageUrls.first;
+        }
       }
     } catch (e) {
+      debugPrint("Commons API error: $e");
+    }
+    return null;
+  }
+
+  Future<void> _sendChatMessage(String text) async {
+    if (text.trim().isEmpty) return;
+
+    setState(() {
+      _chatMessages.add(ChatMessage(text: text, isUser: true));
+      _isTyping = true;
+      _showQuickActions = false;
+    });
+
+    _scrollToBottom();
+
+    final isRu = localeNotifier.value.languageCode == 'ru';
+    final textLower = text.toLowerCase();
+
+    if (textLower.contains('фото') ||
+        textLower.contains('картинк') ||
+        textLower.contains('photo') ||
+        textLower.contains('image') ||
+        textLower.contains('покажи') ||
+        textLower.contains('еще') ||
+        textLower.contains('another') ||
+        textLower.contains('picture')) {
+
+      final imageUrl = await _fetchImageForPlace(_currentPlaceForChat);
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Ошибка при загрузке деталей')),
-        );
+        setState(() {
+          if (imageUrl != null) {
+            _chatMessages.add(ChatMessage(
+                text: isRu ? "Вот фото $_currentPlaceForChat:" : "Here is a photo of $_currentPlaceForChat:",
+                isUser: false,
+                imageUrl: imageUrl
+            ));
+          } else {
+            _chatMessages.add(ChatMessage(
+                text: isRu ? "К сожалению, не удалось найти больше фото для $_currentPlaceForChat." : "Sorry, couldn't find more photos for $_currentPlaceForChat.",
+                isUser: false
+            ));
+          }
+          _isTyping = false;
+          _showQuickActions = true;
+        });
+        _scrollToBottom();
       }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+      return;
+    }
+
+    try {
+      final url = Uri.parse('https://api.groq.com/openai/v1/chat/completions');
+
+      List<Map<String, String>> history = [
+        {
+          "role": "system",
+          "content": "You are a strict, factual local guide in $_currentCity. Answer concisely and confidently. "
+              "CRITICAL RULES: 1) ONLY state verified facts. 2) DO NOT invent places, details, or histories. "
+              "3) If you are not sure, simply say you don't have exact details. "
+              "4) DO NOT apologize or say 'I made a mistake', just provide accurate information. "
+              "Language: ${isRu ? 'Russian' : 'English'}."
+        }
+      ];
+
+      for (var msg in _chatMessages) {
+        if (msg.imageUrl == null) {
+          history.add({
+            "role": msg.isUser ? "user" : "assistant",
+            "content": msg.text,
+          });
+        }
+      }
+
+      final responseRaw = await _callAi(url, _groqApiKey, history);
+      String aiText = jsonDecode(responseRaw)['choices'][0]['message']['content'];
+
+      if (mounted) {
+        setState(() {
+          _chatMessages.add(ChatMessage(text: aiText, isUser: false));
+          _isTyping = false;
+          _showQuickActions = true;
+        });
+        _scrollToBottom();
+      }
+    } catch (e) {
+      debugPrint("Chat AI Error: $e");
+      if (mounted) {
+        setState(() {
+          _chatMessages.add(ChatMessage(
+              text: isRu ? "Извини, произошла ошибка соединения." : "Sorry, connection error.",
+              isUser: false
+          ));
+          _isTyping = false;
+        });
+      }
     }
   }
 
-  void _navigateToDetails(String title, String content, String type) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => PlaceDetailScreen(title: title, content: content, type: type),
-      ),
-    );
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_chatScrollController.hasClients) {
+        _chatScrollController.animateTo(
+          _chatScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   Future<Position> _determinePosition() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) return Future.error('GPS off');
+
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) return Future.error('Permission denied');
     }
-    if (permission == LocationPermission.deniedForever) {
-      return Future.error('Permission denied');
-    }
-    // Снижена точность для ускорения получения координат
+
+    if (permission == LocationPermission.deniedForever) return Future.error('Permission permanently denied');
+
+    Position? lastKnown = await Geolocator.getLastKnownPosition();
+    if (lastKnown != null) return lastKnown;
+
     return await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.low,
-      timeLimit: const Duration(seconds: 5),
+      desiredAccuracy: LocationAccuracy.medium,
+      timeLimit: const Duration(seconds: 10),
     );
   }
 
@@ -325,8 +488,8 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
 
   Future<void> _showPlaceActionSheet(AiPlace place) async {
     final isRu = localeNotifier.value.languageCode == 'ru';
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     const accentColor = Color(0xFF9C27B0);
+    final sheetColor = Theme.of(context).cardColor;
 
     showModalBottomSheet(
       context: context,
@@ -335,7 +498,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
         return Container(
           padding: const EdgeInsets.only(top: 20, left: 16, right: 16, bottom: 60),
           decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+            color: sheetColor,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: Column(
@@ -362,7 +525,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
                 title: Text(isRu ? "Уточнить детали" : "Refine details"),
                 onTap: () {
                   Navigator.pop(context);
-                  _fetchDetailedInfo(place.name, place.type);
+                  _openChatWithPlace(place.name);
                 },
               ),
             ],
@@ -377,6 +540,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
     final isDark = Theme.of(context).brightness == Brightness.dark;
     const accentColor = Color(0xFF9C27B0);
     final allItems = [..._popularPlaces, ..._otherPlaces];
+    final sheetColor = Theme.of(context).cardColor;
 
     showModalBottomSheet(
       context: context,
@@ -386,7 +550,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
         return Container(
           height: MediaQuery.of(context).size.height * 0.7,
           decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+            color: sheetColor,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: Column(
@@ -409,7 +573,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
                     final place = allItems[index];
                     return Card(
                       elevation: 0,
-                      color: isDark ? Colors.white.withOpacity(0.05) : Colors.grey.withOpacity(0.05),
+                      color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
                       margin: const EdgeInsets.only(bottom: 8),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: ListTile(
@@ -417,7 +581,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
                         title: Text(place.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                         onTap: () {
                           Navigator.pop(context);
-                          _fetchDetailedInfo(place.name, place.type);
+                          _openChatWithPlace(place.name);
                         },
                       ),
                     );
@@ -433,114 +597,259 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     const accentColor = Color(0xFF9C27B0);
     final isRu = localeNotifier.value.languageCode == 'ru';
-    final textColor = isDark ? Colors.white : const Color(0xFF1A1A1A);
-    final cardColor = isDark ? const Color(0xFF1C1C1E) : Colors.white;
+
+    final scaffoldColor = theme.scaffoldBackgroundColor;
+    final cardColor = theme.cardColor;
+    final textColor = theme.textTheme.bodyLarge?.color ?? (isDark ? Colors.white : const Color(0xFF1A1A1A));
+    final appBarTextColor = theme.appBarTheme.titleTextStyle?.color ?? textColor;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFF2F2F7),
+      backgroundColor: scaffoldColor,
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.transparent,
         centerTitle: true,
-        title: Text(isRu ? 'ИИ Гид' : 'AI Guide', style: TextStyle(color: textColor, fontWeight: FontWeight.bold)),
+        leading: _isChatOpen
+            ? IconButton(
+          icon: Icon(Icons.close_rounded, color: appBarTextColor),
+          onPressed: () => setState(() => _isChatOpen = false),
+        )
+            : null,
+        title: Text(
+            _isChatOpen ? (isRu ? 'Nexus Ai чат' : 'Nexus Ai Chat') : (isRu ? 'ИИ Гид' : 'AI Guide'),
+            style: TextStyle(color: appBarTextColor, fontWeight: FontWeight.bold)),
+        iconTheme: IconThemeData(color: appBarTextColor),
       ),
-      body: (_isInitialLoading || _isLoading)
-          ? _AiLoadingWidget(
-        cityName: _currentCity,
-        isInitial: _isInitialLoading,
-        accentColor: accentColor,
-      )
-          : _error == "needs_manual_selection"
-          ? _buildManualCitySelection(isRu, textColor, accentColor, cardColor)
-          : ListView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 140),
-        physics: const BouncingScrollPhysics(),
+      body: Stack(
         children: [
-          Container(
-            margin: const EdgeInsets.only(top: 16),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: accentColor.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-            child: Row(
+          if (!_isChatOpen)
+            (_isInitialLoading || _isLoading)
+                ? _AiLoadingWidget(
+              cityName: _currentCity,
+              isInitial: _isInitialLoading,
+              accentColor: accentColor,
+            )
+                : _error == "needs_manual_selection"
+                ? _buildManualCitySelection(isRu, textColor, accentColor, cardColor)
+                : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 140),
+              physics: const BouncingScrollPhysics(),
               children: [
-                const Icon(Icons.auto_awesome_outlined, color: accentColor, size: 18),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    isRu ? 'ИИ собрал для вас интересные места' : 'Your personal guide to $_currentCity',
-                    style: TextStyle(fontSize: 11, color: textColor.withOpacity(0.8), fontWeight: FontWeight.w500),
+                Container(
+                  margin: const EdgeInsets.only(top: 16),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: accentColor.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.auto_awesome_outlined, color: accentColor, size: 18),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          isRu ? 'Наш Nexus Ai собрал для вас интересные места' : 'Your personal guide to $_currentCity',
+                          style: TextStyle(fontSize: 11, color: textColor.withOpacity(0.8), fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+                if (_popularPlaces.isNotEmpty) ...[
+                  _buildSectionHeader(isRu ? "ПОПУЛЯРНОЕ" : "POPULAR", Icons.star_rounded),
+                  ..._popularPlaces.map((place) => _buildPlaceCard(place, cardColor, textColor, accentColor, isDark)),
+                ],
+                if (_otherPlaces.isNotEmpty) ...[
+                  _buildSectionHeader(isRu ? "ИНТЕРЕСНЫЕ НАХОДКИ" : "HIDDEN GEMS", Icons.explore_rounded),
+                  ..._otherPlaces.map((place) => _buildPlaceCard(place, cardColor, textColor, accentColor, isDark)),
+                ],
               ],
             ),
-          ),
-          if (_popularPlaces.isNotEmpty) ...[
-            _buildSectionHeader(isRu ? "ПОПУЛЯРНОЕ" : "POPULAR", Icons.star_rounded),
-            ..._popularPlaces.map((place) => _buildPlaceCard(place, cardColor, textColor, accentColor, isDark)),
-          ],
-          if (_otherPlaces.isNotEmpty) ...[
-            _buildSectionHeader(isRu ? "ИНТЕРЕСНЫЕ НАХОДКИ" : "HIDDEN GEMS", Icons.explore_rounded),
-            ..._otherPlaces.map((place) => _buildPlaceCard(place, cardColor, textColor, accentColor, isDark)),
-          ],
+          if (_isChatOpen) _buildChatUI(isRu, isDark, textColor, accentColor, cardColor),
         ],
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-      floatingActionButton: AnimatedOpacity(
-        opacity: _showButtons ? 1.0 : 0.0,
-        duration: const Duration(milliseconds: 700),
-        child: AnimatedSlide(
-          offset: _showButtons ? Offset.zero : const Offset(0, 0.3),
-          duration: const Duration(milliseconds: 700),
-          curve: Curves.easeOutExpo,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(
-                  flex: 1,
-                  child: SizedBox(
-                    height: 54,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isDark ? Colors.white12 : Colors.black12,
-                        foregroundColor: textColor,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: _fetchRecommendations,
-                      child: const Icon(Icons.refresh_rounded, size: 24),
-                    ),
+      floatingActionButton: (!_isChatOpen && _showButtons)
+          ? Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          children: [
+            Expanded(
+              flex: 1,
+              child: SizedBox(
+                height: 54,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isDark ? Colors.white12 : Colors.black12,
+                    foregroundColor: textColor,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () => _fetchRecommendations(),
+                  child: const Icon(Icons.refresh_rounded, size: 24),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 3,
+              child: SizedBox(
+                height: 54,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: accentColor,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: (_popularPlaces.isEmpty && _otherPlaces.isEmpty) ? null : _showRefineSheet,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.auto_awesome_rounded, size: 20),
+                      const SizedBox(width: 8),
+                      Text(isRu ? "УТОЧНИТЬ" : "REFINE", style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  flex: 3,
-                  child: SizedBox(
-                    height: 54,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: accentColor,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: (_popularPlaces.isEmpty && _otherPlaces.isEmpty) ? null : _showRefineSheet,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.auto_awesome_rounded, size: 20),
-                          const SizedBox(width: 8),
-                          Text(isRu ? "УТОЧНИТЬ" : "REFINE", style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
-                        ],
-                      ),
+              ),
+            ),
+          ],
+        ),
+      )
+          : null,
+    );
+  }
+
+  Widget _buildChatUI(bool isRu, bool isDark, Color textColor, Color accentColor, Color cardColor) {
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            controller: _chatScrollController,
+            padding: const EdgeInsets.all(16),
+            itemCount: _chatMessages.length + (_isTyping ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index == _chatMessages.length) {
+                return const Align(alignment: Alignment.centerLeft, child: Padding(padding: EdgeInsets.all(8.0), child: _AnimatedDots(color: Colors.grey)));
+              }
+              final msg = _chatMessages[index];
+              return Align(
+                alignment: msg.isUser ? Alignment.centerRight : Alignment.centerLeft,
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
+                  decoration: BoxDecoration(
+                    color: msg.isUser ? accentColor : (isDark ? Colors.white10 : Colors.black.withOpacity(0.05)),
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(16),
+                      topRight: const Radius.circular(16),
+                      bottomLeft: Radius.circular(msg.isUser ? 16 : 4),
+                      bottomRight: Radius.circular(msg.isUser ? 4 : 16),
                     ),
                   ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (msg.imageUrl != null) ...[
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.network(
+                            msg.imageUrl!,
+                            fit: BoxFit.cover,
+                            loadingBuilder: (context, child, progress) {
+                              if (progress == null) return child;
+                              return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(strokeWidth: 2)));
+                            },
+                            errorBuilder: (context, error, stackTrace) => Container(
+                              height: 150,
+                              color: Colors.black12,
+                              child: const Center(child: Icon(Icons.broken_image_outlined, color: Colors.grey)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      Text(msg.text, style: TextStyle(color: msg.isUser ? Colors.white : textColor, fontSize: 15)),
+                    ],
+                  ),
                 ),
-              ],
+              );
+            },
+          ),
+        ),
+        if (_showQuickActions)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _quickActionBtn(isRu ? "Показать картинку" : "Show image", Icons.image_outlined, accentColor, () {
+                    _sendChatMessage(isRu ? "Покажи фото этого места" : "Show me a photo");
+                  }),
+                  const SizedBox(width: 8),
+                  _quickActionBtn(isRu ? "Перепроверь информацию" : "Double check", Icons.fact_check_outlined, accentColor, () {
+                    _sendChatMessage(isRu ? "Перепроверь информацию, точно ли это место в $_currentCity?" : "Double check if this place is really in $_currentCity?");
+                  }),
+                ],
+              ),
             ),
           ),
+        Container(
+          padding: EdgeInsets.fromLTRB(16, 8, 16, MediaQuery.of(context).padding.bottom + 16),
+          decoration: BoxDecoration(
+              color: cardColor,
+              border: Border(top: BorderSide(color: isDark ? Colors.white10 : Colors.black.withOpacity(0.1)))
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _chatController,
+                  decoration: InputDecoration(
+                    hintText: isRu ? "Напишите что-нибудь..." : "Type something...",
+                    border: InputBorder.none,
+                    hintStyle: TextStyle(color: textColor.withOpacity(0.4)),
+                  ),
+                  onSubmitted: (val) {
+                    _sendChatMessage(val);
+                    _chatController.clear();
+                  },
+                ),
+              ),
+              IconButton(
+                icon: Icon(Icons.send_rounded, color: accentColor),
+                onPressed: () {
+                  _sendChatMessage(_chatController.text);
+                  _chatController.clear();
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _quickActionBtn(String label, IconData icon, Color accentColor, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: accentColor.withOpacity(0.3)),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: accentColor),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(color: accentColor, fontSize: 12, fontWeight: FontWeight.bold)),
+          ],
         ),
       ),
     );
@@ -557,7 +866,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
           Text(isRu ? "Выберите ваш город" : "Select your city", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: textColor)),
           const SizedBox(height: 8),
           Text(
-            isRu ? "Мы подготовили список самых интересных мест России и мира:" : "We've prepared a list of the most interesting places:",
+            isRu ? "Не удалось определить местоположение. Выберите город из списка:" : "Could not detect location. Please select a city:",
             textAlign: TextAlign.center,
             style: TextStyle(color: textColor.withOpacity(0.6)),
           ),
@@ -577,8 +886,8 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
                   ),
                   child: ListTile(
                     leading: Text(city.icon, style: const TextStyle(fontSize: 24)),
-                    title: Text(city.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+                    title: Text(city.name, style: TextStyle(fontWeight: FontWeight.w600, color: textColor)),
+                    trailing: Icon(Icons.arrow_forward_ios_rounded, size: 14, color: textColor.withOpacity(0.5)),
                     onTap: () => _fetchRecommendations(manualLat: city.lat, manualLon: city.lon, manualName: city.name),
                   ),
                 );
@@ -589,7 +898,7 @@ class _EventsAiScreenState extends State<EventsAiScreen> with SingleTickerProvid
           TextButton.icon(
             onPressed: () => _fetchRecommendations(),
             icon: const Icon(Icons.gps_fixed_rounded, size: 18),
-            label: Text(isRu ? "Определить по GPS" : "Detect via GPS"),
+            label: Text(isRu ? "Попробовать GPS снова" : "Try GPS again"),
           ),
         ],
       ),
@@ -808,20 +1117,24 @@ class PlaceDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     const accentColor = Color(0xFF9C27B0);
-    final textColor = isDark ? Colors.white : const Color(0xFF1A1A1A);
+
+    final textColor = theme.textTheme.bodyLarge?.color ?? (isDark ? Colors.white : const Color(0xFF1A1A1A));
+    final appBarTextColor = theme.appBarTheme.titleTextStyle?.color ?? textColor;
+    final scaffoldColor = theme.scaffoldBackgroundColor;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFF2F2F7),
+      backgroundColor: scaffoldColor,
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.transparent,
         leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_new_rounded, color: textColor, size: 20),
+          icon: Icon(Icons.arrow_back_ios_new_rounded, color: appBarTextColor, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text(title, style: TextStyle(color: textColor, fontWeight: FontWeight.bold)),
+        title: Text(title, style: TextStyle(color: appBarTextColor, fontWeight: FontWeight.bold)),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
