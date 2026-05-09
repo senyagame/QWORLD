@@ -101,7 +101,7 @@ class AppSettings {
   }
 }
 
-const String currentAppVersion = "2.6.0"; // Обновила версию для тебя! :)
+const String currentAppVersion = "2.8.0";
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -429,6 +429,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> with TickerProvider
     }
   }
 
+  void _showRestartDialog(bool toEnglish) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        title: Text(toEnglish ? "Language Changed" : "Язык изменен"),
+        content: Text(toEnglish
+            ? "Please restart the app to apply all changes correctly."
+            : "Пожалуйста, перезапустите приложение, чтобы все изменения применились корректно."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(toEnglish ? "Close" : "Закрыть"),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showTermsDialog() {
     final isRu = localeNotifier.value.languageCode == 'ru';
     showDialog(
@@ -436,11 +455,64 @@ class _OnboardingScreenState extends State<OnboardingScreen> with TickerProvider
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-        title: Text(isRu ? "Условия использования" : "Terms of Use"),
-        content: SingleChildScrollView(
-          child: Text(isRu
-              ? "1. Мы используем данные OpenWeather для предоставления прогнозов.\n2. Ваша геопозиция обрабатывается локально для точности данных.\n3. ИИ-гид предоставляет справочную информацию, требующую проверки.\n4. GPS необходим для работы погодных виджетов.\n5. Приложение в разработке, об ошибках сообщайте разработчику."
-              : "1. We use OpenWeather data to provide forecasts.\n2. Your location is processed locally for data accuracy.\n3. AI Guide provides reference information that requires verification.\n4. GPS is essential for weather widgets."),
+        title: Text(isRu ? "Пользовательское соглашение" : "User Agreement"),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  isRu ? "Последнее обновление: 28 апреля 2026 г." : "Last update: April 28, 2026",
+                  style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.grey),
+                ),
+                const SizedBox(height: 16),
+                RichText(
+                  text: TextSpan(
+                    style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color, fontSize: 14),
+                    children: [
+                      TextSpan(text: isRu ? "Добро пожаловать в " : "Welcome to "),
+                      const TextSpan(text: "QWORLD", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+                      TextSpan(text: isRu
+                          ? ". Используя наше приложение, вы соглашаетесь с данными условиями. Пожалуйста, прочтите их внимательно."
+                          : ". By using our application, you agree to these terms. Please read them carefully."),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _termsSection(isRu ? "1. Общие положения" : "1. General Provisions",
+                    isRu ? "Приложение QWORLD предоставляется «как есть». Мы не даем гарантий бесперебойной работы всех сервисов в любое время." : "The QWORLD application is provided 'as is'. We do not guarantee uninterrupted operation of all services at all times."),
+                _termsSection(isRu ? "2. Использование ИИ (Nexus AI)" : "2. Use of AI (Nexus AI)",
+                    isRu ? "Приложение использует нейросети для генерации ответов." : "The application uses neural networks to generate responses."),
+                Padding(
+                  padding: const EdgeInsets.only(left: 8.0, bottom: 8.0),
+                  child: Column(
+                    children: [
+                      _termsBullet(isRu ? "Точность: " : "Accuracy: ", isRu ? "ИИ может выдавать ошибочные данные. Перепроверяйте информацию." : "AI may produce erroneous data. Double-check the information."),
+                      _termsBullet(isRu ? "Ответственность: " : "Responsibility: ", isRu ? "NEXUS-Q не несет ответственности за последствия использования ответов ИИ." : "NEXUS-Q is not responsible for the consequences of using AI responses."),
+                    ],
+                  ),
+                ),
+                _termsSection(isRu ? "3. Обязанности пользователя" : "3. User Responsibilities",
+                    isRu ? "Запрещено использовать приложение для нарушения законодательства Республики Казахстан и Российской Федерации или попыток дестабилизации работы серверов." : "It is forbidden to use the application to violate the laws of the Republic of Kazakhstan and the Russian Federation or to attempt to destabilize the operation of servers."),
+                _termsSection(isRu ? "4. Интеллектуальная собственность" : "4. Intellectual Property",
+                    isRu ? "Все права на бренд NEXUS-Q, дизайн и исходный код приложения защищены и принадлежат разработчику." : "All rights to the NEXUS-Q brand, design, and source code of the application are protected and belong to the developer."),
+                _termsSection(isRu ? "5. Добровольные пожертвования" : "5. Voluntary Donations",
+                    isRu ? "Приложение бесплатно. Функция «покормить разработчика» является добровольным пожертвованием на поддержку проекта и не дает прав на владение сервисом." : "The application is free. The 'feed the developer' function is a voluntary donation to support the project and does not grant ownership rights to the service."),
+                _termsSection(isRu ? "6. Изменение условий" : "6. Changes to Terms",
+                    isRu ? "Мы оставляем за собой право обновлять Соглашение. Продолжение использования приложения означает ваше согласие с новой редакцией." : "We reserve the right to update the Agreement. Continued use of the application means your acceptance of the new version."),
+                const Divider(),
+                Center(
+                  child: Text(
+                    isRu ? "© 2026 NEXUS-Q. Все права защищены." : "© 2026 NEXUS-Q. All rights reserved.",
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
         actions: [
           TextButton(
@@ -463,6 +535,34 @@ class _OnboardingScreenState extends State<OnboardingScreen> with TickerProvider
             child: Text(isRu ? "Принять" : "Accept"),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _termsSection(String title, String content) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        const SizedBox(height: 4),
+        Text(content, style: const TextStyle(fontSize: 14)),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  Widget _termsBullet(String highlight, String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: RichText(
+        text: TextSpan(
+          style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color, fontSize: 14),
+          children: [
+            const TextSpan(text: "• ", style: TextStyle(fontWeight: FontWeight.bold)),
+            TextSpan(text: highlight, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+            TextSpan(text: text),
+          ],
+        ),
       ),
     );
   }
@@ -586,6 +686,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> with TickerProvider
                   child: Text(isRu ? "Начать" : "Start", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 ),
               ),
+              // Динамическая кнопка смены языка
+              TextButton(
+                onPressed: () {
+                  if (isRu) {
+                    AppSettings.saveLocale(const Locale('en'));
+                    _showRestartDialog(true);
+                  } else {
+                    AppSettings.saveLocale(const Locale('ru'));
+                    _showRestartDialog(false);
+                  }
+                },
+                child: Text(
+                  isRu ? "Continue in English" : "Продолжить на русском",
+                  style: const TextStyle(color: Colors.blueAccent, fontSize: 14),
+                ),
+              ),
               const SizedBox(height: 30),
             ],
           ),
@@ -638,7 +754,7 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _markVersionAsSeen();
     _initAppData();
-    _checkForUpdate(); 
+    _checkForUpdate();
     localeNotifier.addListener(_onLocaleChanged);
   }
 
@@ -700,8 +816,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _fetchQuickData() async {
-    // API КЛЮЧ СКРЫТ
-    const apiKey = "YOUR_OPENWEATHER_API_KEY_HERE";
+    // ВНИМАНИЕ: Замени "YOUR_API_KEY" на свой реальный ключ перед запуском
+    const apiKey = "YOUR_API_KEY";
     double lat = _currentPosition?.latitude ?? 43.2389;
     double lon = _currentPosition?.longitude ?? 76.8897;
     String lang = localeNotifier.value.languageCode;
